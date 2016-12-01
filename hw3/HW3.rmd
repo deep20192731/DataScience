@@ -1,0 +1,269 @@
+---
+title: "HW3"
+author: "Deepesh Nathani"
+date: "October 20, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("C:/Users/Deepesh/Documents/Deepesh/nyu_classes/fall2016/Data Science/HW/HW3/")
+```
+
+```{r echo=FALSE}
+#install.packages("VIM")
+#install.packages("Hmisc")
+#install.packages("corrplot")
+#install.packages("devtools")
+#install_github("ggbiplot", "vqv")
+library(VIM)
+library(mice)
+library(Hmisc)
+library(corrplot)
+library(class)
+library(devtools)
+library(ggbiplot)
+```
+
+```{r echo=FALSE}
+# Import/Processing of Cleveland Heart disease data
+allLines = readLines("cleveland.data")
+
+dummyList = list()
+
+diseaseData = data.frame(Age = numeric(1), Sex = numeric(1), ChestPainType = numeric(1), RestingBloodPressure = numeric(1), Cholestrol = numeric(1), 
+FastingBloodSugar = numeric(1), RestingElecGrapResults = numeric(1), MaxHeartRate = numeric(1), ExerciseInducedAngina = numeric(1), Depression = numeric(1), SlopePeakExercise = numeric(1), MajorVessels = numeric(1), Thal = numeric(1), DiseaseStatus = numeric(1))
+
+temp = 0
+tempLinesRead = 0
+c = 0
+
+indices = c(3,4,9,10,12,16,19,32,38,40,41,44,51,58)
+
+for(i in 1:length(allLines)) {
+  charList = unlist(strsplit(allLines[i], " "))
+  dummyList = append(dummyList, charList)
+  tempLinesRead = tempLinesRead + 1
+  
+  if(length(dummyList) == 76) {
+    temp = temp + 1
+    for(j in indices) {
+      if(!all.is.numeric(dummyList[j])) {
+        dummyList[j] = NA
+      }
+    }
+    
+    diseaseData[temp, ] = c(as.numeric(dummyList[3]), as.numeric(as.numeric(dummyList[4])), as.numeric(as.numeric(dummyList[9])), as.numeric(dummyList[10]), as.numeric(dummyList[12]), as.numeric(as.numeric(dummyList[16])),  as.numeric(as.numeric(dummyList[19])), as.numeric(dummyList[32]), as.numeric(as.numeric(dummyList[38])), as.numeric(dummyList[40]), as.numeric(as.numeric(dummyList[41])), as.numeric(as.numeric(dummyList[44])), as.numeric(as.numeric(dummyList[51])), as.numeric(as.numeric(dummyList[58])))
+    dummyList = list()
+  }
+}
+```
+
+```{r echo=FALSE}
+# All function definitions
+countOfMissingValues <- function(column) {
+  return(sum(column == "?"))
+}
+
+kNNTestAccuracy <- function(predicted, actual) {
+  return(mean(predicted == actual))
+}
+```
+
+### Regression<br/>
+## 1.1 Handling Missing Data<br/>
+```{r echo=FALSE}
+missingValsCount = sapply(diseaseData, countOfMissingValues)
+cat("Total missing values = ", sum(missingValsCount))
+
+cat("While processing we ignored all the missing/nul values since there were not many of those. This is how we are handling Missing Data")
+```
+
+## 1.2 About Response variable (Angiographic Disease Status)<br/>
+```{r echo=FALSE}
+cat("\n Angiographic Disease Status is defined as 0 when there is <50% diameter narrowing while 1 when diameter narrowing is >=50%\n")
+
+responseVarAsFactor = as.factor(diseaseData$DiseaseStatus)
+plot(responseVarAsFactor, xlab = "Disease Status", ylab = "Count", main = "Distribution of Disease status variable")
+
+cat("\nIn the above plot we see that any there are 5 possible values in the file. Any value > 0 should be treated as Heart Disease Diagnosis. Since this variable can get any value it is a numerical variable. This variable can be used in regression as the response variable.\n
+Also, this variable can be used in classification as categorical value\n")
+```
+
+## 1.3 Simple Model for prediction of Heart Disease<br/>
+```{r echo=FALSE}
+# Convert all data to numeric
+for(name in colnames(diseaseData)) {diseaseData[[name]] <- as.numeric(diseaseData[[name]])}
+
+corelationMatrix <- cor(diseaseData, method = "pearson")
+
+cat("\nBelow plot is the corelations of Response Variable(Disease Status) with all other predictor variables. We can clearly see that ChestPaintType, ExerciseInducedAngima, Depression, SlopePeakExercise, MajorVessels and Thal are all highly corelated with the response variable. Also MaxHeart Rate is negatively corelated, which also affects the response variable.\n For this part, we will take all the variables and evaluate the model performance\n")
+corrplot(corelationMatrix, method = "circle")
+
+formu = diseaseData$DiseaseStatus ~ diseaseData$ChestPainType + diseaseData$ExerciseInducedAngina +  diseaseData$Depression + diseaseData$MajorVessels + diseaseData$Thal + diseaseData$MaxHeartRate + diseaseData$SlopePeakExercise + diseaseData$Age + diseaseData$Sex + diseaseData$RestingBloodPressure + diseaseData$Cholestrol + diseaseData$FastingBloodSugar + diseaseData$RestingElecGrapResults
+
+reg <- lm(formu, na.action = na.pass)
+
+cat("\nBelow is the R-Squared error and the Squared Sum of residuals error. We use these measures to evaluate a model. More the R-Squared => Better the model fit.\n")
+cat("R-Squared = ", summary(reg)$adj.r.squared)
+cat("\nSquared Sum of errors = ", sum(reg$residuals^2))
+```
+
+## 1.4 Model performance change analysis<br/>
+```{r echo=FALSE}
+cat("Changing the chest pain variable to factor in R. Also, mapping to binary classification should be done by changing the response variable to 0(for actual value 0) and 1(for actual values 1,2,3)\n")
+
+diseaseData$ChestPainType <- as.factor(diseaseData$ChestPainType)
+diseaseData$DiseaseStatus <- sapply(diseaseData$DiseaseStatus, function(x) {
+  if(x == 0)
+    return(as.factor(0))
+  else
+    return(as.factor(1))
+})
+
+# Logit regresstion is like ln(odds) = ln(p/1-p) = a1*x1 + ...
+totalObservationsInTraining = 0.8*nrow(diseaseData)
+diseaseData.binary = glm(DiseaseStatus~ChestPainType, family = binomial(link='logit'), data = diseaseData[1:totalObservationsInTraining,])
+cat("\nBelow is the summary of the binary classification model\n")
+summary(diseaseData.binary)
+cat("\nWe can see that Asymptotical chest pain(Type 4) is highly indicative of heart disease presense, since its coefficient is positive.\n")
+
+cat("\nTo evaluate the model we divided the set into training(80%) and test set(20%). After fitting the model we run the model on test set. Threshold is 0.5\n")
+diseaseData.pred = predict(diseaseData.binary, newdata = diseaseData[(totalObservationsInTraining+1):nrow(diseaseData),], type = "response")
+
+diseaseData.pred <- ifelse(diseaseData.pred > 0.5,1,0)
+
+misClasificError <- mean(diseaseData.pred != diseaseData[(totalObservationsInTraining+1):nrow(diseaseData),]$DiseaseStatus)
+
+cat("\nBelow is 1-mean(classificationError). We see that we see a huge improvement\n")
+print(paste('Accuracy = ',1-misClasificError))
+```
+
+### KNN Classification
+## 2.1 Train-Test Split<br/>
+```{r echo=FALSE}
+totalObservationsInTraining = ceiling(0.5*nrow(diseaseData))
+trainSet <- subset(diseaseData[1:totalObservationsInTraining,], select = c(3, 14))
+testSet <- subset(diseaseData[(totalObservationsInTraining+1):nrow(diseaseData),], select = c(3, 14))
+
+cat("\nFor both sets(Training and Test) to be balanced, we need equal number of observations in both sets, so nrow(dataset)/2. For good classification we should need almost equal number of positive and negative examples in train set.\n")
+cat("\nAfter splitting the dataset in half, we check the ratio of positive and negative examples. We get good ratio, so #positive-training-examples = 67  and #negative-training-examples = 85 \n")
+```
+
+## 2.2Fit kNN Model<br/>
+```{r echo=FALSE}
+diseaseData.knn <- knn(trainSet, testSet, trainSet$DiseaseStatus, k=5)
+cat("\nBelow are the number of positive and negative samples classified by kNN for k=5\n")
+summary(diseaseData.knn)
+cat("kNNTestAccuracy(mean of number of correct classifications) = ", kNNTestAccuracy(diseaseData.knn, testSet$DiseaseStatus))
+```
+
+## 2.3, 2.4 K-value vs Testing Accuracy<br/>
+```{r echo=FALSE}
+cat("\nBelow is the plot for k-value and testing accuracy. From the curve optimal k value is 1 and 2\n")
+accuracies <- list()
+kvalues <- list()
+for(i in 1:20) {
+  knnM = knn(trainSet, testSet, trainSet$DiseaseStatus, k=i)
+  acc = kNNTestAccuracy(knnM, testSet$DiseaseStatus)
+  accuracies[[i]] <- acc
+  kvalues[[i]] <- i
+}
+
+plot(kvalues, accuracies, type="l", xlab = "k-value", ylab = "Mean of correct classifications")
+```
+
+## 2.5 Null Accuracy<br/>
+```{r echo=FALSE}
+mostFrequentClass = 0
+if(sum(trainSet$DiseaseStatus == 0) < sum(trainSet$DiseaseStatus == 1)) {
+  mostFrequentClass = 1
+}
+
+nullAccuracyPred = as.list(rep(mostFrequentClass, nrow(testSet)))
+accu = kNNTestAccuracy(nullAccuracyPred, testSet$DiseaseStatus)
+
+optimalKnn = knn(trainSet, testSet, trainSet$DiseaseStatus, k=5)
+optimalAcc = kNNTestAccuracy(optimalKnn, testSet$DiseaseStatus)
+
+cat("\nSo the mean of null accuracy is", accu, ". With kNN we were getting", optimalAcc, " for k=5.\n")
+```
+
+## 2.6 kNN vs Regression<br/>
+```{r echo=FALSE}
+errors = sapply(accuracies, function(x) {return(1-x)})
+cat("\nBelow are the plots for both kNN and Regression\n")
+plot(kvalues, errors, type="l", xlab = "k-value", ylab = "Mean of errors")
+
+plot(reg$residuals, type="l", xlab = "Records", ylab = "Error")
+```
+
+## 2.7 Exploring data for other features<br/>
+```{r echo=FALSE}
+cat("\nFrom the correlation matrix we can see that there are many other variables that are related to the response variable(last column in matrix).\n
+    1. ChestPainType -> Previously Explored\n
+    2. ExcerciseInducedAngima\n
+    3. Depression\n
+    4. MajorVessels\n
+    5. Thal\n
+    6. Max Heart Rate -> Negatively affects Disease Status\n")
+corrplot(corelationMatrix, method = "circle")
+```
+
+### PCA Analysis
+## 3.1 Applying PCA on Data
+```{r echo=FALSE}
+cat("\nTo scale covariates, we make it numeric again\n")
+# Make the data numeric again
+for(name in colnames(diseaseData)) {diseaseData[[name]] <- as.numeric(diseaseData[[name]])}
+diseaseData$DiseaseStatus <- as.factor(diseaseData$DiseaseStatus)
+scaledData <- scale(diseaseData[,1:length(colnames(diseaseData))-1])
+
+cat("\nBelow is the plot for PCA data\n")
+pca <- prcomp(scaledData, center = TRUE, scale. = TRUE)
+plot(pca, type="l", main="PCA Plot for Disease Data")
+
+cat("\nBelow is the summary of PCA Analysis\n")
+summary(pca)
+```
+
+## 3.2 Plotting PCA Score Vectors
+```{r echo=FALSE}
+cat("\nBelow are the plots when data is projected onto principal components\n")
+cat("\nBelow is the plot showing principal components. Projection is on first 2 PC(Age and Sex). The two colors for dots relate to the binary value in response variable\n")
+g1 = ggbiplot(pca, obs.scale = 1, var.scale = 1, 
+              groups = as.factor(diseaseData$DiseaseStatus), ellipse = TRUE, 
+              circle = TRUE)
+g1 = g1 + scale_color_discrete(name = '')
+g1 = g1 + theme(legend.direction = 'horizontal', 
+               legend.position = 'top')
+print(g1)
+```
+
+```{r echo=FALSE}
+cat("\nBelow is the plot showing principal components. Projection is on first 2 PC(Age and Sex). The two colors for dots relate to the binary value in response variable\n")
+g2 = ggbiplot(pca, choices = c(1,3), obs.scale = 1, var.scale = 1, 
+              groups = as.factor(diseaseData$DiseaseStatus), ellipse = TRUE, 
+              circle = TRUE)
+g2 = g2 + scale_color_discrete(name = '')
+g2 = g2 + theme(legend.direction = 'horizontal', 
+               legend.position = 'top')
+print(g2)
+```
+
+```{r echo=FALSE}
+cat("\nFrom the above plots, we see the covariates clusters. Qualitatively speaking:\n
+    1. MaxHeartRate -> Covariate having a strong indicator of absense of disease\n
+    2. All other variables somehow have connection with presence of disease\n")
+```
+
+## 3.3 Comparing covarites clusters
+```{r echo=FALSE}
+cat("\nCovariates identified by kNN and PCA indicate that following covariates are the most important.\n
+    1. MaxHeartRate\n
+    2. Thal\n
+    3. MajorVessels
+    4. ExerciseIndicedAngima\n
+    5. ChestPainType\n
+    6. Depression\n")
+```

@@ -1,0 +1,4 @@
+load("/Users/deepeshnathani/Documents/nyu/fall2016/datascience/hw4/TDM.rdata")
+a = load("/Users/deepeshnathani/Documents/nyu/fall2016/datascience/hw4/TDM.rdata")
+a
+a[1]

@@ -1,0 +1,242 @@
+---
+title: "HW2"
+author: "Deepesh Nathani"
+date: "October 3, 2016"
+output: html_document
+---
+
+```{r echo=FALSE}
+# All package installs go here
+# install.packages('forecast')
+# install.packages('tseries')
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("/Users/deepeshnathani/Documents/nyu/fall2016/datascience/hw2")
+```
+
+```{r echo=FALSE}
+# All package includes go here
+library(forecast)
+library(tseries)
+```
+
+```{r echo=FALSE}
+# Read all data and convert to time-series in this block
+seriesData <- scan("jojo.dat")
+timeSeriesData <- ts(seriesData, frequency = 4)
+```
+
+**1. Exploring Time Series**<br/>
+*1.1 Describe Main Features*<br/>
+Below is the plot of time series data<br/>
+```{r echo=FALSE}
+plot(timeSeriesData,
+     xlab = "Quarter",
+     ylab = "Earnings/Share")
+
+```
+
+<br/> The length and frequency of the time series are <br/>
+```{r echo=FALSE}
+cat("Length= ", length(timeSeriesData), ("(this is the total number of observations)"))
+cat("Frequency= ", frequency(timeSeriesData), "(since data is recorded once per quarter)")
+```
+
+<br/>*1.2 Make data stationary using R Functions*<br/>
+```{r echo=FALSE}
+cat("We use the decompose function to split the series in different components. As we see that the magnitude of seasonality increases every quarter. This implies that series is multiplicative, to change it to additive we take the log of the original series\n")
+decomposedData <- decompose(log(timeSeriesData))
+seasonalComponent <- decomposedData$seasonal
+trendComponent <- decomposedData$trend
+
+cat("Below are the plots for Observed+Trend+Seasonal+Residual components\n")
+plot(decomposedData, xlab = "Quarter")
+```
+
+```{r echo=FALSE}
+cat("Below is the plot of stationary time-series after removing trend and seasonal component\n")
+deTrendedData <- diff(log(timeSeriesData))
+residualData <- deTrendedData - seasonalComponent
+
+plot(residualData, xlab = "Quarter", ylab="Residual-Value")
+```
+
+<br/>*1.3 Make data stationary using own Functions*<br/>
+```{r echo=FALSE}
+cat("Since data has a multiplicative seasonal factor, we take the log of actual time-series and model it using linear regression as TimeSeries = Trend + Seasonal + Remaining\n")
+cat("For seasonal part we use sinusoidal functions while for trend we take the diff of the residuals. This will give us the white noise series\n")
+
+trend = seq(length = length(timeSeriesData))
+Q = sin(2*pi*trend) + cos(2*pi*trend) + sin(pi*trend) + cos(pi*trend) + sin(3*pi*trend) + cos(3*pi*trend) + sin(4*pi*trend) + cos(4*pi*trend)
+model = log(timeSeriesData) ~ Q
+reg = lm(model, na.action=NULL)
+
+cat("Below is the plot for log series and the white noise series extracted\n")
+plot(log(timeSeriesData))
+lines(diff(reg$residuals), col=4, lwd=2)
+```
+
+```{r echo=FALSE}
+cat("Below is the pcf plot of the above white series confirming stationarity\n")
+pacf(diff(reg$residuals))
+```
+<br/>*1.4 Check if data is stationary*<br/>
+```{r echo=FALSE}
+cat("From the below ACF plot we see that corelations are decaying at higher lags. This implies that at higher lags change in x(t-1) have no increase/decrease impact on x(t), implying stationarity\n")
+acf(residualData, type = "correlation", na.action = na.pass)
+```
+
+```{r echo=FALSE}
+cat("\nBelow is the PACF plot of the parital corealtions. Again there is a decaying pattern suggesting stationarity\n")
+pacf(residualData, na.action = na.pass)
+```
+
+<br/>*1.5 Compare Results using statistic test*<br/>
+```{r echo=FALSE}
+cat("Below is the statistic test which confirms the stationarity of the series\n")
+adf.test(residualData)
+```
+
+**Forecasting based on Exponential Smoothing**<br/>
+*Use simple exponential smoothing*<br/>
+```{r echo=FALSE}
+forecastWithLessAlpha <- ses(residualData, initial = "simple", alpha = 0.1)
+forecastWithMedAlpha <- ses(residualData, initial = "simple", alpha = 0.5)
+forecastWithGreaterAlpha <- ses(residualData, initial = "simple", alpha = 0.9)
+
+cat("Below are the forecast plots for different alpha\n")
+plot(forecastWithLessAlpha, main = "alpha=0.1")
+```
+```{r echo=FALSE}
+plot(forecastWithMedAlpha, main = "alpha=0.5")
+```
+```{r echo=FALSE}
+plot(forecastWithGreaterAlpha, main = "alpha=0.9")
+cat("\nWe see that for very less/greater alpha the 80% and 95% prediction interval for each quarter increases.\n")
+```
+
+*Calculate within sample SSE*<br/>
+```{r echo=FALSE}
+expSmoothing = ses(residualData, alpha=0.1, initial="simple", h=1)
+error = sum((residualData - fitted(expSmoothing))^2)
+cat("For alpha = 0.1, SSE error is = ", error)
+
+expSmoothing = ses(residualData, alpha=0.4, initial="simple", h=1)
+error = sum((residualData - fitted(expSmoothing))^2)
+cat("For alpha = 0.4, SSE error is = ", error)
+
+expSmoothing = ses(residualData, alpha=0.9, initial="simple", h=1)
+error = sum((residualData - fitted(expSmoothing))^2)
+cat("For alpha = 0.9, SSE error is = ", error)
+```
+*Plot SSE vs Alpha*<br/>
+```{r echo=FALSE}
+alphas = c()
+sse = c()
+count = 0
+for(i in seq(0, 1, by=0.1)) {
+  # We generate smoothing only for one whole year = 4 quarters
+  expSmoothing = ses(residualData, alpha=i, initial="simple", h=4)
+  alphas[count] <- i
+
+  sqSumError = sum((residualData - fitted(expSmoothing))^2)
+  sse[count] <- sqSumError
+  count = count+1
+}
+
+cat("Below is the plot for alpha vs sse\n")
+plot(alphas, sse, type="l")
+cat("\n We can see that somewhere alpha values that are not too low and high have least sse error. And optimal value around ~0.1\n")
+```
+
+*SES should select optimal alpha*<br/>
+```{r echo=FALSE}
+# Generating 4 step ahead forecasts
+automaticOptimalForecast = ses(residualData, initial="simple", h=4)
+error = sum((residualData - fitted(automaticOptimalForecast))^2)
+
+cat("\nBelow is the plot for forecasts of next 4 frequencies. Optimal alpha is selected by the function\n")
+plot(automaticOptimalForecast)
+
+cat("\n So the optimal alpha selected is 0.0908 which agrees to our previous observations(part-b).\n")
+cat("\nError = ", error, "\n")
+```
+
+*Change option to choose initial states*<br/>
+```{r echo=FALSE}
+optimalForecast = ses(residualData, initial="optimal", h=4)
+errorInOptimal <- sum((residualData - fitted(optimalForecast))^2)
+cat("\nBelow is the plot for forecasts of next 4 frequencies\n")
+plot(optimalForecast)
+
+cat("\nError = ", errorInOptimal, "\n")
+cat("\nSo by choosing optimal intial states, we have an improvement in error. Difference =", errorInOptimal-error, "\n")
+```
+
+**Forecasting based on ARIMA**<br/>
+*Plotting ACF and PACF*<br/>
+```{r echo=FALSE}
+cat("Below is the ACF data for the stationary data obtained from part 1\n")
+acf(residualData, type = "correlation", na.action = na.pass)
+```
+
+```{r echo=FALSE}
+cat("Below is the PACF curve for the data\n")
+pacf(residualData, na.action = na.pass)
+
+cat("Looking at the ACF and PACF plots, we can see that PACF cuts off at lag 1 while ACF cuts off at lag 3. So we take p=1 and q=3. So ARIMA order of AR(1,0,3)")
+```
+
+*Fitting ARIMA Model and Plotting ACF and PACF for each*<br/>
+```{r echo=FALSE}
+cat("ARIMA Order ARMA(1,0,3)\n")
+Model1 <- arima(residualData, order=c(1,0,3))
+
+cat("ACF and PACF Plots are below\n")
+acf(Model1$residuals)
+```
+
+```{r echo=FALSE}
+pacf(Model1$residuals)
+```
+
+```{r echo=FALSE}
+cat("ARIMA Order ARMA(2,0,3)\n")
+Model2 <- arima(residualData, order=c(5,0,3))
+
+cat("ACF and PACF Plots are below\n")
+acf(Model2$residuals)
+```
+
+```{r echo=FALSE}
+pacf(Model2$residuals)
+```
+
+```{r echo=FALSE}
+cat("ARIMA Order ARMA(5,0,3)\n")
+Model3 <- arima(residualData, order=c(7,0,3))
+acf(Model3$residuals)
+```
+
+```{r echo=FALSE}
+pacf(Model3$residuals)
+```
+
+*Predict future values*<br/>
+```{r echo=FALSE}
+cat("\nTaking optimal model as ARMA(7,0,3) since all the values in PACF curve for all lags are less within the boundaries, implying very good fit\n")
+model <- arima(residualData, order=c(7,0,3))
+cat("Below are the predicted values\n")
+predicted <- predict(model, n.ahead=4)
+summary(predicted)
+```
+
+*Analysing SSE*<br/>
+```{r echo=FALSE}
+sse = sum(model$residuals^2)
+cat("SSE for this prediction is ", sse, "\n")
+cat("SSE for SES was 2.32712  while for ARIMA it is 0.5715\nARIMA's fit is clearly better than SES")
+cat("Differnce between ses and ARIMA SSE = ", errorInOptimal-sse)
+```

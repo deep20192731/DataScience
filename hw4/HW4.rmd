@@ -1,0 +1,345 @@
+---
+title: "HW4"
+author: "Deepesh Nathani"
+date: "November 10, 2016"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("/Users/deepeshnathani/Documents/nyu/fall2016/datascience/hw4")
+```
+
+```{r echo=FALSE}
+# Install packages
+# install.packages("twitteR")
+# install.packages("plyr")
+# install.packages("tm")
+# install.packages("SnowballC")
+# install.packages("text2vec")
+# install.packages("RWeka")
+# install.packages("rJava")
+# install.packages("e1071")
+# install.packages("ngram")
+# install.packages("assertive")
+# install.packages("Hmisc")
+# install.packages("wordcloud")
+# install.packages("caret")
+# install.packages("ROCR")
+# install.packages("rpart")
+# install.packages("igraph")
+library(igraph)
+library(rpart)
+library(ROCR)
+library(kernlab)
+library(caret)
+library(wordcloud)
+library(base)
+library(ngram)
+library(assertive)
+library(Hmisc)
+library(e1071)
+library(RWeka)
+library(SnowballC)
+library(tm)
+library(twitteR)
+library(plyr)
+library(text2vec)
+```
+
+```{r echo=FALSE}
+# Declare Twitter API Credentials and Setup connections. Replacing the API Keys with ##
+api_key <- "##"
+api_secret <- "##"
+token <- "##-##"
+token_secret <- "##"
+
+Sys.setlocale(locale="C")
+
+# Create Twitter Connection
+# setup_twitter_oauth(api_key, api_secret, token, token_secret)
+```
+
+```{r echo=FALSE}
+# Define all functions here
+removeURL <- function(x) gsub('http.*\\s*', '', x)
+
+generateDocumentTermMatrix <- function(features, ng) {
+  corpus <- Corpus(VectorSource(features)) # create corpus for features
+  
+  corpus <- tm_map(corpus, content_transformer(removeURL)) # remove all URL's
+  corpus <- tm_map(corpus, removeWords, stopwords("english")) # remove all stopwords
+  corpus <- tm_map(corpus, stemDocument, language="en") # stem all words in the document
+  corpus <- tm_map(corpus, content_transformer(tolower)) # change to lowercase
+  corpus <- tm_map(corpus, removeNumbers) # remove all numbers
+  corpus <- tm_map(corpus, removePunctuation) # remove all punctuations
+  corpus <- tm_map(corpus, stripWhitespace) # strip all white spaces
+  
+  options(mc.cores=1) # RWeka has a problem with parallel threads
+  ngramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = ng, max = ng)) # create n-grams
+  dtm <- DocumentTermMatrix(corpus, control = list(tokenize = ngramTokenizer)) # create Document Term Matrix
+  return(dtm)
+}
+```
+
+
+### Gender Classifier<br/>
+## 1.1 Retrieving Tweets from Twitter<br/>
+```{r echo=FALSE}
+# Retrive and save tweets in a file
+# tweets <- unclass(searchTwitter("#election2016", 1000))
+# df <- do.call("rbind", lapply(tweets, as.data.frame))
+# write.csv(df, file='1000tweets.csv')
+
+cat("\nTweets are saved in file named 1000tweets.csv. Later we retrive the tweets from this file and do a hand tag of gender from profile photo. We use the Twitter API from twitterR package\n")
+```
+
+## 1.2 Hand Label Tweets<br/>
+```{r echo=FALSE}
+# Retreive the saved tweets
+tweetsSaved <- read.csv("1000tweets.csv", stringsAsFactors = FALSE)
+
+# Get the profile pics. This should be commented out when knitting
+# profilePics = c()
+# for(i in 146:300) {
+  # sN = tweetsSaved[i,]$screenName
+  # userObj = getUser(sN)
+  # profilePics[i] = userObj$profileImageUrl
+# }
+
+gender <- rep(NA, nrow(tweetsSaved)) # base gender array
+
+manualTag <- c("F", NA, NA, "F", "F", "M", "M", "F", NA, NA, NA, NA, NA, "M", "F", "M", "M", "M", NA, 
+              "M", "F", NA, NA, "F", "F", "M", "F", "F", NA, NA, "F", "F", NA, "M", NA, "M", "F", "F",
+              "F", "F", "F", "F", "F", "F", NA, NA, "M", "F", "F", "F", NA, NA, "F", "M", NA, "F", "F",
+              NA, "F", NA, "F", NA, "M", "M", NA, "F", "F", "F", "F", "F", "M", NA, NA, "F", "M", "F",
+              "M", NA, "M", "M", NA, "F", "F", "F", NA, "F", "M", "F", "F", NA, NA, NA, "F", NA, "M",
+              "M", "M", "M", "M", "M", "F", NA, "F", "M", "M", "F", "M", NA, NA, "M", "M", "M", "M", "M",
+              "F", "M", "M", "M", NA, NA, "M", "F", "F", NA, "F", "F", NA, "M", "F", "M", NA, NA, NA, "M"
+              , "F", NA, NA, "M", "F", NA, "M", "F", "M", "F", "F")
+
+
+
+# Replace all tags with new tags which are manually done
+for(i in 1:length(manualTag)) {
+  if(!is.na(manualTag[i])) {
+    gender[i] = manualTag[i]
+  }
+}
+
+cat("\nFor Hand label, we first extract profileImage URL's and then manually add the tag\n")
+cat("\nBelow is the distribution of labels for training set.\n")
+table(gender)
+
+# Add column to dataframe
+tweetsSaved$gender <- gender
+```
+
+## 1.3 SVM Classifier using n-gram approach<br/>
+```{r echo=FALSE}
+tweetsText = subset(tweetsSaved$text, !is.na(tweetsSaved$gender))
+
+trainTweetsOutput = as.factor(subset(tweetsSaved$gender, !is.na(tweetsSaved$gender)))
+
+testTweetsSet = subset(tweetsSaved$text, is.na(tweetsSaved$gender))
+
+cat("\nBelow are the stategies employed for cleaning Twitter Data\n")
+cat("\nStemming: We do stemming for each word. So every word in every tweet is stemmed to its base version. Example 'running' to 'run'\n")
+cat("\nCase: All words are converted to lower-case before being made as features for SVM\n")
+cat("\nPunctuations: All punctuations are ignored\n")
+cat("\nOther Words: All stop words, whitespaces and numbers are also removed\n")
+
+cat("\nAfter data cleaning, next we need to construct n-grams specifically 1-gram, 2-grams and 3-grams as features and feed them to SVM Classifier. For SVM we are using LinearSVM model\n")
+
+cat("\nBefore going any furthur, it should be noted that the tweets are extracted for hash-tag #Election2016\n")
+
+cat("\nFirst we create the the model using uni-grams. Below are the frequent uni-grams in training set and the plot for prediction on training set\n")
+OneGramDTM = generateDocumentTermMatrix(tweetsText, 1)
+OneGramFeatures = OneGramDTM$dimnames$Terms
+OneGramDF <- data.frame(trainTweetsOutput, as.matrix(OneGramDTM))
+
+OneGramModel <- svm(trainTweetsOutput~., data=OneGramDF, type = 'C-classification', kernel = 'linear', cross=5)
+
+paste(findFreqTerms(OneGramDTM, 8))
+plot(OneGramModel$fitted)
+
+cat("\nNext we create the model for bi-grams. Below is the prediction on training set and the most frequent bi-grams\n")
+TwoGramDTM = generateDocumentTermMatrix(tweetsText, 2)
+TwoGramFeatures = TwoGramDTM$dimnames$Terms
+TwoGramDF <- data.frame(trainTweetsOutput, as.matrix(TwoGramDTM))
+
+TwoGramModel <- svm(trainTweetsOutput~., data=TwoGramDF, type = 'C-classification', kernel = 'linear', cross = 5)
+
+paste(findFreqTerms(TwoGramDTM, 6))
+plot(TwoGramModel$fitted)
+
+cat("\nFinally we create the model for tri-grams. Below is the prediction on training set and the most frequent tri-grams\n")
+ThreeGramDTM = generateDocumentTermMatrix(tweetsText, 3)
+ThreeGramFeatures = ThreeGramDTM$dimnames$Terms
+ThreeGramDF <- data.frame(trainTweetsOutput, as.matrix(ThreeGramDTM))
+
+ThreeGramModel <- svm(trainTweetsOutput~., data=ThreeGramDF, type = 'C-classification', kernel = 'linear', cross = 5)
+
+paste(findFreqTerms(ThreeGramDTM, 6))
+plot(ThreeGramModel$fitted)
+```
+
+## 1.4 Common features for men/women<br/>
+```{r echo=FALSE}
+cat("\nThese features are from all uni-gram, bi-gram, tri-gram models, We show 5 Unigrams, 3 Bi-Grams and 2 Tri-Grams. For this we first create hyperplane(weight vector) for both women and man and than get the top most features with most weights\n")
+
+# Remember that decision boundary is a linear combination of support vectors in linear SVM Classifier
+cat("\nBelow are some common features for Women\n")
+wUniForWomen <- sort(as.data.frame(t(OneGramModel$coefs[1:OneGramModel$nSV[1]]) %*% OneGramModel$SV[1:OneGramModel$nSV[1], ]), decreasing = TRUE)
+wBiForWomen <- sort(as.data.frame(t(TwoGramModel$coefs[1:TwoGramModel$nSV[1]]) %*% TwoGramModel$SV[1:TwoGramModel$nSV[1], ]), decreasing = TRUE)
+wTriForWomen <- sort(as.data.frame(t(ThreeGramModel$coefs[1:ThreeGramModel$nSV[1]]) %*% ThreeGramModel$SV[1:ThreeGramModel$nSV[1], ]), decreasing = TRUE)
+
+featuresForWomen = append(append(wUniForWomen[1:5], wBiForWomen[1:3]), wTriForWomen[1:2])
+paste(names(featuresForWomen))
+
+cat("\nBelow are some common features for Men\n")
+wUniForMen <- sort(as.data.frame(t(OneGramModel$coefs[OneGramModel$nSV[1]:OneGramModel$tot.nSV]) %*% OneGramModel$SV[OneGramModel$nSV[1]:OneGramModel$tot.nSV, ]), decreasing = TRUE)
+wBiForMen <- sort(as.data.frame(t(TwoGramModel$coefs[TwoGramModel$nSV[1]:TwoGramModel$tot.nSV]) %*% TwoGramModel$SV[TwoGramModel$nSV[1]:TwoGramModel$tot.nSV, ]), decreasing = TRUE)
+wTriForMen <- sort(as.data.frame(t(ThreeGramModel$coefs[ThreeGramModel$nSV[1]:ThreeGramModel$tot.nSV]) %*% ThreeGramModel$SV[ThreeGramModel$nSV[1]:ThreeGramModel$tot.nSV, ]), decreasing = TRUE)
+
+featuresForMen = append(append(wUniForMen[1:5], wBiForMen[1:3]), wTriForMen[1:2])
+paste(names(featuresForMen))
+```
+
+## 1.5 Evaluating Classifier Performance<br/>
+```{r echo=FALSE}
+cat("\nTo evaluate the model, we use 5-fold cross validation technique since we do not have enough data points for a 80:20 split\n")
+
+cat("\nBelow is the summary of accuracies of uni-gram model\n")
+summary(OneGramModel)
+
+cat("\nBelow is the summary of accuracies of bi-gram model\n")
+summary(TwoGramModel)
+
+cat("\nBelow is the summary of accuracies of tri-gram model\n")
+summary(ThreeGramModel)
+```
+
+## 1.6 Relabelling and Re-training<br/>
+```{r echo=FALSE}
+cat("\nHere we manually tag 100 more tweets and run tri-gram classifier only. Below are the most frequent terms, plot and summary of the retrained model\n")
+moreManualTags <- c(NA, "F", "F", "F", "M", "M", "M", NA, "F", "M", "M", "F", "F", "F", "F", NA, NA, NA, "M", NA, "F", "M", "F", "F", "M", "M", NA, "M", NA, "F", "F", "F", "F", "F", NA, NA, NA, NA, "M", "M", NA, "M", "M", "F", "M", "M", "F", "F", "M", NA, "M", "F", "F", "F", "M", "F", NA, "F", "F", "M", "M", "F", "M", "M", "M", NA, NA, NA, NA, "M", "M", "M", "F", "M", "M", "F", "F", NA, "F", "M", "F", "F", "F", "M", NA, "M", "F", "F", "M", "M", "F", "M", "M", NA, "M", "M", NA, NA, NA, NA,  "F", "F", "F", "F", "F", NA, "M", NA,  "M", "M", "F", "F", "M", "F", NA, "M", NA, NA, NA, "F", "F", "F", "F", "M", "M", "F", NA, "M", "M", "M", "F", "F", "F", NA)
+
+moreManualTags = append(manualTag, moreManualTags)
+
+genderN <- rep(NA, nrow(tweetsSaved)) # base gender array
+for(i in 1:length(moreManualTags)) {
+  if(!is.na(moreManualTags[i])) {
+    genderN[i] = moreManualTags[i]
+  }
+}
+tweetsSaved$gender <- genderN
+
+trainText = subset(tweetsSaved$text, !is.na(tweetsSaved$gender))
+
+outputs = as.factor(subset(tweetsSaved$gender, !is.na(tweetsSaved$gender)))
+
+BiGramDTM = generateDocumentTermMatrix(trainText, 3)
+BiGramFeatures = BiGramDTM$dimnames$Terms
+BiGramDF <- data.frame(outputs, as.matrix(BiGramDTM))
+
+BiGramModel <- svm(outputs~., data=BiGramDF, type = 'C-classification', kernel = 'linear', cross = 5)
+
+paste(findFreqTerms(BiGramDTM, 8))
+plot(BiGramModel$fitted)
+summary(BiGramModel)
+```
+
+### Social Network Analysis<br/>
+```{r echo=FALSE}
+# Load the data
+load("TDM.RData", verbose = TRUE) # object name is termDocMatrix
+termDocMatrix <- as.matrix(termDocMatrix)
+```
+
+## 2.1 Adjacency Matrix and Graph<br/>
+```{r echo=FALSE}
+termDocMatrix[termDocMatrix>=1] <- 1 # converting to binary matrix values. 0 indicates no edge
+termMatrix <- termDocMatrix %*% t(termDocMatrix) # Adjacency Matrix
+
+cat("\nHere is the Adjacency Matrix summary. Actual Matrix is too big to display. This is a Term-to-Term Matrix where if two skills share a group there is a 1 else 0. The graph below has been changed to remove loops i.e. converted to simple graph\n")
+g <- graph.adjacency(termMatrix, mode = "undirected")
+summary(g)
+
+g <- simplify(g) # convert to simple graph (one with no loops)
+V(g)$label <- V(g)$name
+V(g)$degree <- degree(g)
+
+layout1 <- layout.fruchterman.reingold(g)
+
+cat("\nBelow is the graph plot for the above Adjacency Matrix\n")
+plot(g, layout=layout1)
+```
+
+## 2.2 Betweenness and Closeness Centrality<br/>
+```{r echo=FALSE}
+cat("\nSince skills in the above matrix are vertices, we are interested in Vertex Betweenness. Below are 5 skills with most Betweenness Centrality\n")
+betweeness <- sort(estimate_betweenness(g, vids = V(g), directed = FALSE, cutoff=2), decreasing = TRUE)
+
+paste(names(betweeness)[1:5])
+paste(betweeness[1:5])
+
+cat("\nBelow are the words with highest closeness centrality measures\n")
+closeness <- sort(estimate_closeness(g, vids = V(g), mode = c("out", "in", "all", "total"), cutoff=2), decreasing = TRUE)
+
+paste(names(closeness)[1:5])
+paste(closeness[1:5])
+```
+
+## 2.3 Corelation with centriality measures<br/>
+```{r echo=FALSE}
+dfForMeasures <- data.frame(V(g)$name, betweeness, closeness)
+
+cat("\nBelow is the plot for betweenness and closeness\n")
+plot(dfForMeasures[2:3])
+
+cat("\nAbove plot shows that both measures are corelated. Below table confirms this obsdervation\n")
+cor(dfForMeasures[2:3])
+```
+
+## 2.4 Design custom Termbox matrix with centrality measures constraint<br/>
+```{r echo=FALSE}
+cat("\nBelow is the matrix with high betweenness and low closeness. Means there is only one node which monopolizes connections.\n")
+m1 = matrix(c(1,0,0,0,0,0,0, 0,1,1,0,0,0,0, 0,1,1,1,1,1,0, 0,0,1,1,1,1,0, 0,0,1,0,1,0,0, 0,0,1,0,0,1,0, 0,0,0,0,0,0,0), nrow = 7, ncol = 7)
+g1 <- graph.adjacency(m1, mode = "undirected")
+g1 <- simplify(g1)
+
+betweeness1 <- estimate_betweenness(g1, vids = V(g1), directed = TRUE, cutoff=3)
+closeness1 <- estimate_closeness(g1, vids = V(g1), mode = c("out", "in", "all", "total"), cutoff=3)
+V(g1)$name <- V(g1)
+V(g1)$degree <- degree(g1)
+
+print(m1)
+
+cat("\nBelow are the betweenness and closeness for the above matrix along with the graph.\n")
+
+paste(betweeness1)
+paste(closeness1)
+paste("Corelation between betweenness and closeness centrality = ", cor(betweeness1, closeness1))
+plot(g1)
+
+
+cat("\nBelow is the matrix with high closeness and low Betweenness. Means there could be many central nodes\n")
+m2 = matrix(c(1,1,0,1,1,1,1, 0,1,1,0,0,0,0, 0,1,1,1,1,1,0, 0,0,1,1,1,1,0, 0,0,1,0,1,0,0, 0,0,1,0,0,1,0, 0,0,0,0,0,0,0), nrow = 7, ncol = 7)
+g2 <- graph.adjacency(m2, mode = "undirected")
+g2 <- simplify(g2)
+
+betweeness2 <- estimate_betweenness(g2, vids = V(g2), directed = TRUE, cutoff=3)
+closeness2 <- estimate_closeness(g2, vids = V(g2), mode = c("out", "in", "all", "total"), cutoff=3)
+V(g2)$name <- V(g2)
+V(g2)$degree <- degree(g2)
+
+print(m2)
+cat("\nBelow are the betweenness and closeness for the above matrix along with the graph. Here Node 4 has low betweenness but high closeness\n")
+paste(betweeness2)
+paste(closeness2)
+paste("Corelation between betweenness and closeness centrality = ", cor(betweeness2, closeness2))
+plot(g2)
+```

@@ -1,0 +1,285 @@
+---
+title: "Homework-1"
+author: "Deepesh Nathani"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("C:/Users/Deepesh/Documents/Deepesh/nyu classes/fall2016/Data Science/HW/HW1/")
+```
+
+```{r echo=FALSE}
+# install.packages('mice')
+# install.packages('VIM')
+# install.packages('imputeTS')
+# install.packages('zoo')
+# install.packages("XML")
+```
+
+```{r echo=FALSE}
+library(mice)
+library(VIM)
+library(lattice)
+library(imputeTS)
+library(zoo)
+library(XML)
+```
+
+```{r echo=FALSE}
+# Load all the below data files
+# 1) US-FLU Data
+# 2) Countries Latitude Data
+# 3) World FLU Data
+# 4) World Population Data
+fluData <- read.csv("us-flu.csv",
+                   header = TRUE,
+                   stringsAsFactors = TRUE,
+                   strip.white = TRUE)
+latitudeData <- read.csv("countries.csv",
+                        header = TRUE,
+                        stringsAsFactors = TRUE,
+                        strip.white = TRUE)
+worldFluData <- read.csv("world-flu.csv",
+                        header = TRUE,
+                        stringsAsFactors = TRUE,
+                        strip.white = TRUE)
+populationData <- read.csv("population.csv",
+                        header = TRUE,
+                        stringsAsFactors = TRUE,
+                        strip.white = TRUE)
+
+attach(fluData)
+attach(latitudeData)
+attach(worldFluData)
+attach(populationData)
+
+# Convert dates to POSIX Format
+usFluDates <- as.POSIXlt(fluData$Date, format="%m/%d/%Y")
+fluData$Date <- usFluDates
+
+worldFluDates <- as.POSIXlt(worldFluData$Date, format="%m/%d/%Y")
+worldFluData$Date <- worldFluDates
+
+# Replace all " " with "."
+latitudeData$Name <- gsub(" ", ".", latitudeData$Name)
+```
+
+```{r echo=FALSE}
+# All Function Definitions go in this block
+
+# Gets Mode of a vector
+Mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+# Get % of na's in data
+pMiss = function(x) {
+  (sum(is.na(x))/length(x))*100
+} 
+
+# see if element is there in the vector
+contains = function(x, eleToSearch) {
+  for(ele in x) {
+    
+    if(ele == eleToSearch) {
+      return(TRUE)
+    }
+  }
+  return(FALSE)
+}
+```
+<br/>
+**1.1 Qualitative Differences between Region-1 and Region-10**<br/>
+
+Central Tendency and Dispersion Measures for *Region-1*
+```{r echo=FALSE}
+region1Data <- fluData$HHS.Region.1..CT..ME..MA..NH..RI..VT.
+
+summary(region1Data)
+cat("Mode: ", Mode(region1Data))
+cat("Standard Deviation: ", sd(region1Data))
+```
+
+Central Tendency and Dispersion Measures for *Region-10*
+```{r echo=FALSE}
+region10Data <- fluData$HHS.Region.10..AK..ID..OR..WA.
+summary(region10Data)
+cat("Mode: ", Mode(region10Data))
+cat("Standard Deviation: ", sd(region10Data))
+```
+
+Below are the *box-plots* for both the regions<br/>
+```{r echo=FALSE}
+boxplot(region1Data, region10Data, names = c("Region1", "Region10"))
+```
+**Qualitative Description**<br/>
+We can see that 75% of the values are less than 1115.0 for Region-1 while for Region-10 the same number is around 1868.0, which tells us that Region-1 had less flu search activities compared to Region-10. Also, looking at the mode, median and mean of both region's distribution, we can say that they both are positively skewed i.e. most values are small
+
+<br/>
+<br/>
+**1.2 Query Data Comparison for cities in Arizona**<br/>
+```{r echo=FALSE}
+# Get the columns corresponding to cities in AZ
+dates = fluData$Date
+azCityData = fluData[grep("..AZ$", names(fluData), value = TRUE)]
+```
+
+These are the missing data metrics for all the cities in Arizona.
+We can see that *Mesa* and *Scottsdale* have a lot of missing values
+```{r echo=FALSE}
+missingDataMetrics = sapply(azCityData, function(x) sum(is.na(x)))
+missingDataMetrics
+```
+
+Below is the plot before any imputation of Mesa
+```{r echo=FALSE}
+plot(dates, azCityData$Mesa..AZ, ylab="Flu Search Activity for Mesa")
+```
+
+```{r echo=FALSE}
+im1 = na.interpolation(azCityData$Mesa..AZ, option = "spline")
+im2 = na.interpolation(azCityData$Scottsdale..AZ, option = "spline")
+
+azCityData$Mesa..AZ <- im1
+azCityData$Scottsdale..AZ <- im2
+```
+
+Below is the plot for Mesa after imputation
+```{r echo=FALSE}
+plot(dates, azCityData$Mesa..AZ, ylab="Flu Search Activity for Mesa")
+```
+<br/>
+**Reasoning behind dealing with missing data**<br/>
+Since the data does not have a linear pattern we cannot just replace the missing values by 
+mean or use linear regression. So I went for spline method in imputeTS package since its regression is on a polynomial which can better fit this periodic data
+<br/>
+```{r echo=FALSE}
+boxplot(azCityData$Mesa..AZ, azCityData$Phoenix..AZ, azCityData$Scottsdale..AZ,
+          azCityData$Tempe..AZ, azCityData$Tucson..AZ,
+          names = c("Mesa", "Phoenix", "Scottsdale", "Tempe", "Tucson"))
+```
+<br/>**Observations about distributions of 5 cities** <br/>
+Distributions for all the 5 cities in Arizona are similar in terms of central tendency and dispersion. For Phoenix we have the minimum Q3 which suggests that most search estimates related to Flu are less. Also, all distributions are positively skewed
+<br/>
+For metrics, I used the 5-number summary(min, max, median, Q1 and Q3) since they give a good
+idea about which way the distribution is inclined
+
+<br/>
+<br/>
+**1.3 Relationship between population and peak flu trend**<br/>
+*Source for United States Population* [US Population Source] http://www.usnews.com/opinion/blogs/robert-schlesinger/2014/12/31/us-population-2015-320-million-and-world-population-72-billion
+```{r echo=FALSE}
+statesInPopulationData = populationData$Area
+maxFluSearchesPerYear = aggregate(fluData, list(fluData$Date$year + 1900), max)
+maxFluSearchesIn2015 <- maxFluSearchesPerYear[maxFluSearchesPerYear[, 1] == 2015,]
+
+count = 1
+populationDataFrame = data.frame(stringsAsFactors = TRUE)
+# colnames(populationDataFrame) = c("Area", "PeakFluValue", "Census-Data", "RatioOfPeopleSearching")
+
+# Iterate through Population Data and US-Flu Search and get the (area, peakValue, census, ratioOfPeople who searched for flu)
+for(state in statesInPopulationData) {
+  for(fluState in colnames(maxFluSearchesIn2015)){
+    if(identical(state, fluState)){
+      populationDataFrame[count, 1] = state
+      maxVal = maxFluSearchesIn2015[,populationDataFrame[count, 1]]
+      populationDataFrame[count, 2] = maxVal
+
+      populationRow = populationData[(populationData[, c("Area")] == state),]
+
+      population = substr(populationRow$X2015, 1, 9)
+      population = as.numeric(gsub(",","",population))
+      populationDataFrame[count, 3] = population
+
+      ratio = ((maxVal/as.numeric(population)))
+      populationDataFrame[count, 4] = ratio
+      
+      count <- count+1
+    }
+  }
+}
+
+plot(populationDataFrame$V2, populationDataFrame$V3, xlab = "Peak-Flu Searches", ylab = "Population")
+```
+<br/>
+**Any relationship between population and flu-searches ?**<br/>
+Looking at the plot above there does not seems to be any relation between Population and Peak-Flu Searches. The scatter plot is scattered and not have any signs for positive or negative corealtion
+
+<br/>
+<br/>
+**1.4 Relationship between coutries center latitude and flu trends**<br/>
+Source for latitudes [Latitude Source] https://developers.google.com/public-data/docs/canonical/countries_csv
+```{r echo=FALSE}
+allYears = worldFluData$Date$year+1900 # gets all the years in the column
+dates = worldFluData$Date[worldFluData$Date$year+1900 == 2015] # gets all dates in column
+
+peakWeeks= data.frame(stringsAsFactors = FALSE)
+for(countryName in names(worldFluData[2:length(worldFluData)])) {
+  # get the date in 2015 having max value
+  peekD <- dates[with(worldFluData, which.max(worldFluData[[countryName]][allYears == 2015]))]
+  weekNum <- week(peekD)
+  
+  val = latitudeData[latitudeData[,4]==countryName,]
+  lat = val$Latitude
+  # fill the data frame
+  peakWeeks[1, countryName] <- weekNum
+  peakWeeks[2, countryName] <- lat
+}
+
+# Transforming data frame into a format that can be plotted
+cntries = names(peakWeeks)
+weekNums = as.numeric(peakWeeks[1,])
+lats = as.numeric(peakWeeks[2,])
+
+weeks = data.frame(cntries, weekNums, lats)
+names(weeks) <- c("areas", "week-num", "latitudes")
+plot(weeks$areas, weeks$`week-num`,type='p')
+```
+<br/>**Any relationship between latitudes and week-num ?**<br/>
+Looking at the plot, majority of flu searches for countries are around start and mid of the year. This suggests that for starting weeks there is more flu-search activity while towards the end of the year number of flu searches reduces.
+
+<br/>
+<br/>
+**2. Dealing with Noisy Data**<br/>
+Below are the boxplots for all three aggregation. We clearly see that as we reduce frequency, the number of outliers reduce. This makes sense since if an outlier has a huge impact at weekly grain then its effect will be reduced when taken to a higher grain like monthly or yearly
+```{r echo=FALSE}
+# We deal with missing data first
+fluData$United.States = na.interpolation(fluData$United.States, option = 'spline')
+
+fluDataByYear = aggregate(fluData[2:30],
+                          list(fluData$Date$year + 1900),
+                          mean)
+fluDataByMonth = aggregate(fluData[2:30],
+                           list(month = substr(fluData$Date, 1, 7)),
+                           mean)
+
+temp <-as.yearmon(fluDataByMonth$month)
+fluDataByMonth$month = temp
+boxplot(fluData$United.States, fluDataByMonth$United.States, fluDataByYear$United.States,
+        names = c("WeeklyAgg", "MonthAgg", "YearAgg"))
+```
+
+<br/>
+<br/>
+**3. Web Scraping**<br/>
+```{r echo=FALSE}
+urlForTable = htmlParse("http://www.cdc.gov/mmwr/preview/mmwrhtml/mm6401a4.htm?s_cid=mm6401a4_w")
+allTables = readHTMLTable(urlForTable, stringsAsFactors = TRUE)[1]
+
+part1 = allTables[[1]][2:2,3]
+part2 = allTables[[1]][3:3,4]
+part3 = allTables[[1]][7:10]
+```
+<br>
+Source = http://us.soccerway.com/international/europe/uefa-cup/20162017/group-stage/r35527/
+Below is the table extracted
+```{r echo=FALSE}
+euroUrl<-"http://us.soccerway.com/international/europe/uefa-cup/20162017/group-stage/r35527/"
+euroUrl<-htmlParse(euroUrl)
+euroUrl.tabs= readHTMLTable(euroUrl)
+names(euroUrl.tabs)
+tab1 <- as.data.frame(euroUrl.tabs[1],stringsAsFactors = TRUE)
+tab1
+```

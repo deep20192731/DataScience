@@ -1,0 +1,157 @@
+---
+title: "HW5"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("/Users/deepeshnathani/Documents/nyu/fall2016/datascience/hw5")
+```
+
+```{r echo=FALSE}
+# All library installs and includes go here.
+# install.packages("xts")
+
+# devtools::install_github("twitter/AnomalyDetection")
+library(xts)
+library(forecast)
+library(zoo)
+library(tseries)
+library(AnomalyDetection)
+```
+
+```{r echo=FALSE}
+fmt <- function(x) {
+	weeks <- function(x) as.numeric(x + 3) %/% 7 + 1
+	sprintf("%s%05d", format(x, "%Y/%m/Week"), weeks(x) - weeks(x[1]) + 1)
+}
+```
+
+```{r echo=FALSE}
+# Process Data
+healthData <- read.csv("Health_Data.csv", stringsAsFactors = FALSE)
+colnames(healthData) <- c("Start", "Finish", "Steps")
+healthData$Steps <- as.numeric(healthData$Steps)
+
+# strptime takes - not /
+healthData$Start <- gsub("/", "-", healthData$Start)
+healthData$Finish <- gsub("/", "-", healthData$Finish)
+
+healthData$Start <- as.POSIXct(strptime(healthData$Start, "%m-%d-%y %H:%M"))
+healthData$Finish <- as.POSIXct(strptime(healthData$Finish, "%m-%d-%y %H:%M"))
+```
+
+## Evaluation and Visualization<br/>
+### 1. Graphical Properties of Health Data<br/>
+```{r echo=FALSE}
+d1 <- as.POSIXlt(healthData$Start,format = "%m/%d/%Y %H:%M")
+d2<- as.POSIXlt(healthData$Finish,format = "%m/%d/%Y %H:%M")
+
+healthData$Start<-d1
+healthData$Finish<-d2
+
+aggregateMonthly<- aggregate(healthData$Steps, list(month=substr(healthData$Finish,1,7)), sum) 
+colnames(aggregateMonthly)<-c("Month","StepCount")
+temp<- as.yearmon(aggregateMonthly$Month)
+aggregateMonthly$Month<-temp
+
+monthlyTS = ts(aggregateMonthly$StepCount, frequency = 10)
+
+cat("\nBelow is the line-graph plot aggregated monthly. The underlying data is a Time-Series Data. With line graph trend, pattern or comparison is easily apprehended.\n")
+
+plot(aggregateMonthly$StepCount, xlab = "Month-Num", ylab = "Step-Count", type = "l")
+
+cat("\nBelow is the line graph plot aggregated weekly\n")
+dates <- as.Date(healthData$Finish, "%Y-%m-%d")
+weeklyAgg <- aggregate(healthData$Steps, list(Date = fmt(dates)), sum)
+weeklyTS <- ts(weeklyAgg$x, frequency = 52)
+plot(weeklyAgg$x, xlab = "Week-Num", ylab = "Step-Count", type = "l")
+
+cat("\nBelow is the line graph plot aggregated daily.\n")
+dailyData <- healthData
+dailyData$Start <- NULL
+dailyData$Finish <- as.Date(substr(dailyData$Finish, 1, 10))
+
+dailyData = aggregate(dailyData$Steps, list(daily = dailyData$Finish), sum)
+
+dailyTS <- ts(dailyData$x, start = c(2015, 2, 16), frequency = 180)
+plot(dailyData$x, xlab = "Day-Num", ylab = "Step-Count", type = "l")
+
+cat("\nUnderlying data is a time-series data, so it will have a trend and seasonality patterns. With line-graph those patterns can be seen directly. From above curves(Monthly Aggregate Curve), we can visualize that there is a decreasing trend i.e. number of steps reduces with time. From the same curve we see there is some seasnality pattern too.\n")
+```
+### 2. Analysing Seasonal Patterns<br/>
+```{r echo=FALSE}
+monTS = ts(aggregateMonthly$StepCount, frequency = 10)
+decomposeMonthly = stl(monTS, s.window="periodic")
+plot(decomposeMonthly$time.series, xlab = "Month-Num")
+
+cat("\nAbove time series(aggregated monthly) frequency is 10 months. Seasonal Pattern can be seen visually.\n")
+
+monTS = ts(aggregateMonthly$StepCount, frequency = 6)
+decomposeMonthly = stl(monTS, s.window="periodic")
+plot(decomposeMonthly$time.series, xlab = "Month-Num")
+
+cat("\nAbove the time series frequency(aggregated monthly) is 6 months. We can see that there is some seasonal pattern.\n")
+
+decomposedDaily = stl(dailyTS, s.window="periodic")
+plot(decomposedDaily$time.series)
+
+cat("\nAbove the time series frequency(aggregated daily) is 180 days(3 months). The pattern is not visually evident, but when decomposed, we can see some seasonal pattern\n")
+
+decomposeWeekly = stl(weeklyTS, s.window="periodic")
+plot(decomposeWeekly)
+
+cat("\nAbove the time series frequency(aggregated weekly) is 52 weeks(~1 year). The pattern is not visually evident, but when decomposed, we can see some seasonal pattern.\n")
+```
+
+### 3. Prediction Model<br/>
+```{r echo=FALSE}
+trainMonthData <- head(aggregateMonthly, -3)
+testMonthData <- tail(aggregateMonthly, 3)
+
+trainMonthTS <- ts(trainMonthData$StepCount, frequency = 12)
+testMonthTS <- ts(testMonthData$StepCount, frequency = 12)
+
+monthlyFit <- tbats(trainMonthTS)
+monthlyForecast <- forecast(monthlyFit, h=4)
+monthlyError <- sum(tail(monthlyForecast$mean, 3) - testMonthData$StepCount)
+
+trainWeekData <- head(weeklyAgg, -12) # Removing last 3 months
+testWeekData <- tail(weeklyAgg, 12)
+trainWeekTS <- ts(trainWeekData$x, frequency = 52)
+
+weeklyFit <- tbats(trainWeekTS)
+weeklyForecast <- forecast(weeklyFit, h=13)
+weeklyError <- sum(tail(weeklyForecast$mean, 12) - testWeekData$x)
+
+dailyTrainData <- head(dailyData, -30) # Removing last 3 months
+testDailyData <- tail(dailyData, 30)
+dailyTrainTS <- ts(dailyTrainData$x, frequency = 365)
+
+dailyFit <- tbats(dailyTrainTS)
+dailyForecast <- forecast(dailyFit, h=31)
+dailyError <- sum(tail(dailyForecast$mean, 30) - testDailyData$x)
+
+cat("\nBelow are the errors from monthly, weekly and daily predictions/forecast. Daily predictions have the least error and work the best. Reason is that anomalies does not have too much effect on daily data than they have on weekly and monthly data. This is the reason why, monthly data have bad performance.\n")
+cat("Monthly Error = ", monthlyError)
+cat("Weekly Error = ", weeklyError)
+cat("Daily Error = ", abs(dailyError))
+```
+
+### 4. Analyze Anomalies<br/>
+```{r echo=FALSE}
+cat("\nOne way to identify anomalies is to have a box-plot of underlying data. It will plot the outliers. These outliers are points that are 1.5 times Interquartile range above or below.\n")
+cat("\nBelow are the box plots for month, week and daily data.\n")
+
+boxplot(aggregateMonthly$StepCount)
+boxplot(weeklyAgg$x)
+boxplot(dailyData$x)
+```
+
+### 5. Visualize Anomaly Days<br/>
+```{r echo=FALSE}
+cat("\nBelow is the daily plot which highlights Anomalies as circles. With circles of different color, it is easy to identify the anomalies.\n")
+dailyData$daily <- as.POSIXct(dailyData$daily)
+p = AnomalyDetectionTs(dailyData, max_anoms=0.45, direction='both', plot=TRUE)
+p$plot
+```
